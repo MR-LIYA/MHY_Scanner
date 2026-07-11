@@ -200,11 +200,34 @@ class MainWindow(QMainWindow):
     )
 
     CHANGELOG_HTML = """
-            <h3>v1.0.3 (2026-05)</h3>
+            <h3>v1.0.4 (2026-07)</h3>
+            <p>近期改动聚焦「严格对齐 C++ 版 `src` 的 api 与扫码两个模块」，修复了直播流扫码无法打开、以及官服扫码缺头导致校验不稳定的问题。</p>
             <ul>
-                <li>支持手动刷新cookie（抖音直接刷新即可，B站需要扫码登陆一下提取登录态）</li>
-                <li>当前版本验证码暂不支持HarmonyOS及IOS，后续修复</li>
+                <li>
+                    <strong>直播流扫描（`scanner/scanner.py` `StreamScanner`）</strong>：
+                    <ul>
+                        <li>由原来直接用 `cv2.VideoCapture(url)` 打开直播流，改为<strong>优先使用 FFmpeg 子进程管道</strong>（`ffmpeg -i ... -f rawvideo`）读取帧，对应 C++ `QRCodeForStream::setUrl` / `avformat_open_input` 的实现。</li>
+                        <li>新增 `set_headers()`，按平台注入 HTTP 头。对齐 C++ `WindowMain::GetStreamLink`：B 站流必须带 `User-Agent` / `Referer: https://live.bilibili.com/` / `Origin: https://live.bilibili.com`，否则 `bilivideo.com` CDN 返回 403、OpenCV 无法打开流（原「无法打开直播流」报错的根因）。</li>
+                        <li>对齐 C++ 的 FFmpeg 低延迟选项：`rw_timeout=5000000`、`probesize=1024`、`max_delay=0`、`+nobuffer` / `low_delay`。</li>
+                        <li>帧统一缩放为 1280×720 供二维码检测；停止扫描时正确 `terminate` FFmpeg 子进程，避免残留。</li>
+                        <li>保留 `cv2.VideoCapture` 作为系统无 FFmpeg 时的回退路径。</li>
+                    </ul>
+                </li>
+                <li>
+                    <strong>直播流平台头（`ui/main_window.py` `start_stream_scan`）</strong>：
+                    <ul>
+                        <li>当平台为 BiliBili 时，向 `StreamScanner` 写入与 C++ 一致的 `User-Agent` / `Referer` / `Origin` 头。</li>
+                    </ul>
+                </li>
+                <li>
+                    <strong>官服扫码头（`api/api.py` `panda_scan_qrcode`）</strong>：
+                    <ul>
+                        <li>补齐 C++ `PandaScanQRCode` 必发的 `x-rpc-app_id` 与 `x-rpc-device_id` 请求头，使 `panda/qrcode/scan` 返回有效的 `passport_qr_url`。</li>
+                    </ul>
+                </li>
+                <li>支持了米哈游云游戏的扫码登录：仅支持下载安装版本的云游戏，不支持浏览器版本的云游戏。</li>
             </ul>
+            <p style="color:#666;font-size:13px;margin-top:10px;">说明：上述改动均为与 C++ `src`（C++ 版 `MHY_Scanner`）逐字段对齐，不涉及账号/登录协议逻辑变更。</p>
             <hr>
             <p style='color:gray;font-size:12px;'>本项目为参考项目改进而来，修复了已知 BUG。</p>
         """
