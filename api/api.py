@@ -177,14 +177,14 @@ PASSPORT_PANDA_APP_ID = "bll8iq97cem8"
 PASSPORT_SCAN_QR = f"{PASSPORT_BASE}/account/ma-cn-passport/app/scanQRLogin"
 PASSPORT_CONFIRM_QR = f"{PASSPORT_BASE}/account/ma-cn-passport/app/confirmQRLogin"
 
-# ── hoyolab / 米游社 扫码登录（新 passport API） ──────────────
-# 端点: passport-api.miyoushe.com
-# 确认登录后通过响应 Set-Cookie 直接返回 ltoken_v2/cookie_token，
-# 无需 login_ticket → stoken 的额外转换步骤
-PASSPORT_MIYOUSHE = "https://passport-api.miyoushe.com"
-HOYOLAB_QR_CREATE = f"{PASSPORT_MIYOUSHE}/account/ma-cn-passport/web/createQRLogin"
-HOYOLAB_QR_QUERY = f"{PASSPORT_MIYOUSHE}/account/ma-cn-passport/web/queryQRLoginStatus"
-HOYOLAB_APP_ID = "bll8iq97cem8"  # x-rpc-app_id 固定值
+# ── 米游社扫码登录（对齐 C++ MhyApi.hpp GetLoginQrcodeUrl / GetQRCodeState） ──
+# 对齐 C++ 使用 passport-api.mihoyo.com 的 app 版端点（非 miyoushe 的 web 版），
+# 这样 Confirmed 时 data["data"]["tokens"][0]["token"] 即为 stoken，
+# 与 C++ GetQRCodeState 返回的 stoken 完全一致（共享 userinfo.json 互通所需）。
+# C++ GetLoginQrcodeUrl 使用的 x-rpc-app_id 固定为 dw9y09jqjpxc。
+PASSPORT_CPP_APP_ID = "dw9y09jqjpxc"
+HOYOLAB_QR_CREATE = f"{PASSPORT_BASE}/account/ma-cn-passport/app/createQRLogin"
+HOYOLAB_QR_QUERY = f"{PASSPORT_BASE}/account/ma-cn-passport/app/queryQRLoginStatus"
 
 # RSA 公钥拉取 URL（尝试多个已知端点）
 RSA_KEY_URLS = [
@@ -982,26 +982,23 @@ class MhyApi:
     #   1. 端点变为 passport-api.miyoushe.com
     #   2. 状态名: Created (未扫) / Scanned (已扫) / Confirmed (确认)
     #   3. Confirmed 时 token 通过响应 Set-Cookie 头直接返回 (ltoken_v2/cookie_token)
-    #   4. 无需额外 login_ticket → stoken 转换步骤
-    
-    def _hoyolab_headers(self) -> Dict[str, str]:
-        """hoyolab QR 登录专用请求头"""
-        return {
-            "Content-Type": "application/json",
-            "x-rpc-app_id": HOYOLAB_APP_ID,
-            "x-rpc-device_id": self.device_id,
-        }
-    
-    def fetch_hoyolab_qrcode(self) -> Tuple[str, str]:
-        """获取 hoyolab 扫码登录二维码（新 passport API）
+    #   4. 无需额外 login_ticket → stoken 转换步骤（已对齐 C++ passport mihoyo.com 端点）
 
-        POST https://passport-api.miyoushe.com/account/ma-cn-passport/web/createQRLogin
+    def fetch_hoyolab_qrcode(self) -> Tuple[str, str]:
+        """获取米游社扫码登录二维码（对齐 C++ GetLoginQrcodeUrl）
+
+        POST https://passport-api.mihoyo.com/account/ma-cn-passport/app/createQRLogin
+        请求头: x-rpc-app_id=dw9y09jqjpxc, x-rpc-device_id（对齐 C++ GetLoginQrcodeUrl）
 
         Returns: (qrcode_url, ticket)
-        - qrcode_url: 用于生成二维码图片的 URL
-        - ticket: UUID 格式，用于后续轮询查询状态
+        - qrcode_url: 用于生成二维码图片的 URL（data["data"]["url"]）
+        - ticket: 用于后续轮询查询状态的 ticket（data["data"]["ticket"]）
         """
-        headers = self._hoyolab_headers()
+        headers = {
+            "Content-Type": "application/json",
+            "x-rpc-app_id": PASSPORT_CPP_APP_ID,
+            "x-rpc-device_id": self.device_id,
+        }
 
         try:
             resp = _safe_post(HOYOLAB_QR_CREATE, json_data={}, headers=headers)
@@ -1021,20 +1018,26 @@ class MhyApi:
             return "", ""
     
     def query_hoyolab_qrcode_status(self, ticket: str) -> Tuple[str, str, str, str]:
-        """查询 hoyolab 扫码登录二维码状态（新 passport API）
+        """查询米游社扫码登录二维码状态（对齐 C++ GetQRCodeState）
 
-        POST https://passport-api.miyoushe.com/account/ma-cn-passport/web/queryQRLoginStatus
+        POST https://passport-api.mihoyo.com/account/ma-cn-passport/app/queryQRLoginStatus
+        请求头: x-rpc-app_id=dw9y09jqjpxc, x-rpc-device_id（对齐 C++ GetQRCodeState）
 
-        Returns: (status_name, uid, mid, token)
+        Returns: (status_name, uid, mid, stoken)
         - status_name: "Created" / "Scanned" / "Confirmed" / "Expired"
-        - uid/mid/token: 仅 Confirmed 时有值
-          - token: 从响应 Set-Cookie 提取 (优先级: ltoken_v2 > cookie_token)
+        - uid/mid/stoken: 仅 Confirmed 时有值
+          - stoken: data["data"]["tokens"][0]["token"]  ← 与 C++ GetQRCodeState 完全一致，
+            即后续存入 userinfo.json access_key 的凭证
+          - uid:    data["data"]["user_info"]["aid"]
+          - mid:    data["data"]["user_info"]["mid"]
 
-        特殊 retcode:
-        - -3501: 二维码已过期
-        - -3505: 用户取消扫码
+        对齐 C++ GetQRCodeState: 任意非0 retcode 直接判定为 Expired（与 C++ 行为一致）。
         """
-        headers = self._hoyolab_headers()
+        headers = {
+            "Content-Type": "application/json",
+            "x-rpc-app_id": PASSPORT_CPP_APP_ID,
+            "x-rpc-device_id": self.device_id,
+        }
         data = {"ticket": ticket}
 
         try:
@@ -1042,15 +1045,8 @@ class MhyApi:
             result = resp.json()
             qr_log(f"[hoyolab_qr_query] response: {result}", LogLevel.DEBUG)
 
+            # 对齐 C++ GetQRCodeState: if (retcode != 0) return Expired
             retcode = result.get("retcode", -1)
-
-            # 过期/取消
-            if retcode == -3501:
-                qr_log(f"[hoyolab_qr_query] 二维码已过期 (-3501)", LogLevel.DEBUG)
-                return "Expired", "", "", ""
-            if retcode == -3505:
-                qr_log(f"[hoyolab_qr_query] 用户取消扫码 (-3505)", LogLevel.DEBUG)
-                return "Expired", "", "", ""
             if retcode != 0:
                 msg = result.get("message", "")
                 qr_log(f"[hoyolab_qr_query] retcode={retcode} msg={msg} → Expired", LogLevel.WARN)
@@ -1061,17 +1057,17 @@ class MhyApi:
 
             if status == "Confirmed":
                 user_info = result["data"].get("user_info", {})
+                tokens = result["data"].get("tokens", [])
                 uid = str(user_info.get("aid", ""))
                 mid = str(user_info.get("mid", ""))
-
-                # 从 Set-Cookie 提取 token
-                token = self._extract_token_from_cookies(resp)
+                # 对齐 C++ GetQRCodeState: tokens[0]["token"] 作为 stoken
+                stoken = tokens[0]["token"] if tokens else ""
                 qr_log(
                     f"[hoyolab_qr_query] Confirmed! uid={uid}, mid={mid}, "
-                    f"token={'✓' if token else '✗'}",
+                    f"stoken={'✓' if stoken else '✗'}",
                     LogLevel.DEBUG
                 )
-                return "Confirmed", uid, mid, token
+                return "Confirmed", uid, mid, stoken
 
             elif status == "Scanned":
                 return "Scanned", "", "", ""
@@ -1085,50 +1081,7 @@ class MhyApi:
             qr_log(f"[hoyolab_qr_query] 异常: {e}", LogLevel.WARN)
             return "Created", "", "", ""
     
-    def _extract_token_from_cookies(self, resp) -> str:
-        """从 HTTP 响应中提取登录 token（优先级: ltoken_v2 > cookie_token）
 
-        hoyolab QR 确认登录后，token 通过 Set-Cookie 头返回，不在 JSON body 中。
-        常见 cookie 名称: ltoken_v2, cookie_token, ltoken, stoken
-        """
-        try:
-            # 方式1: 从响应 cookies 属性获取
-            for name in ["ltoken_v2", "cookie_token", "ltoken", "stoken"]:
-                val = self._get_cookie(resp, name)
-                if val:
-                    qr_log(f"[cookie_extract] found {name}={val[:16]}...", LogLevel.DEBUG)
-                    return val
-
-            # 方式2: 解析 Set-Cookie 原始头
-            set_cookie = resp.headers.get("Set-Cookie", "")
-            if set_cookie:
-                import re
-                for name in ["ltoken_v2", "cookie_token", "ltoken", "stoken"]:
-                    match = re.search(rf'{name}=([^;]+)', set_cookie)
-                    if match:
-                        val = match.group(1)
-                        qr_log(f"[cookie_extract] found {name} from Set-Cookie header", LogLevel.DEBUG)
-                        return val
-
-            qr_log("[cookie_extract] no token found in cookies", LogLevel.WARN)
-            return ""
-        except Exception as e:
-            qr_log(f"[cookie_extract] error: {e}", LogLevel.WARN)
-            return ""
-    
-    @staticmethod
-    def _get_cookie(resp, name: str) -> str:
-        """从响应对象提取指定名称的 cookie"""
-        try:
-            cookies = resp.cookies
-            # requests.cookies (RequestsCookieJar) / curl_cffi cookies
-            if hasattr(cookies, 'get'):
-                return cookies.get(name, "")
-            else:
-                return cookies.get(name, "")
-        except Exception:
-            return ""
-    
     # ═══════════════════════════════════════════════════════════════
     
     def get_stoken_by_game_token(self, uid: str, game_token: str, ticket: str = "", biz_key: str = "") -> Tuple[int, str, str]:

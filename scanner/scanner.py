@@ -7,6 +7,8 @@ import time
 import shutil
 import subprocess
 import traceback
+import queue
+import threading
 import cv2
 import numpy as np
 from typing import Optional, Callable, Tuple
@@ -235,7 +237,6 @@ class StreamScanner(QThread):
         self._stream_url = ""
         self._last_ticket = ""
         self._frame_count = 0
-        self._skip_frames = 5  # 每隔几帧检测一次
         self._used_tickets = set()  # 已处理的ticket，防止重复检测
         self._headers = {}          # 打开直播流所需的 HTTP 头（对齐 C++ GetStreamLink 的 heards）
         self._proc = None           # ffmpeg 子进程（对齐 C++ avformat_open_input）
@@ -274,9 +275,11 @@ class StreamScanner(QThread):
             self._proc = None
 
     def run(self):
-        """开始扫描"""
+        """开始扫描（读帧/检测分离：reader 线程只管以最快速度拉取并保留最新一帧，
+        检测线程永远解码「当前画面」，避免 ffmpeg 管道缓冲堆积造成延迟、扫不上码）"""
         self._running = True
         self._last_ticket = ""
+        self._frame_count = 0
 
         if not self._stream_url:
             self.scan_error.emit("未设置直播流URL")
@@ -301,15 +304,36 @@ class StreamScanner(QThread):
 
         self.stream_status.emit("正在连接直播流...")
 
-        for frame in frame_iter:
-            if not self._running:
-                break
+        # 最新帧队列：最多保留 1 帧，reader 拉到新帧时挤掉旧帧，保证检测基于当前画面
+        latest = queue.Queue(maxsize=1)
+
+        def reader():
+            try:
+                for frame in frame_iter:
+                    if not self._running:
+                        break
+                    if latest.full():
+                        try:
+                            latest.get_nowait()
+                        except queue.Empty:
+                            pass
+                    latest.put(frame)
+            except Exception as e:
+                scanner_log(f"[StreamScanner] reader 异常: {e}", LogLevel.WARN)
+            finally:
+                # 流断开即通知主循环退出
+                self._running = False
+
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
+
+        while self._running:
+            try:
+                frame = latest.get(timeout=2)
+            except queue.Empty:
+                continue
 
             self._frame_count += 1
-
-            # 每隔几帧检测一次
-            if self._frame_count % self._skip_frames != 0:
-                continue
 
             # ffmpeg 路径已统一缩放到 1280x720；cv2 路径按需缩放
             if frame.shape[1] > 1280 or frame.shape[0] > 720:
@@ -318,7 +342,7 @@ class StreamScanner(QThread):
                 if scale != 1.0:
                     frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
 
-            # 检测并解码二维码
+            # 检测并解码二维码（每帧都检测，不再跳帧）
             qr_data = self._detect_qr(frame)
 
             # C++ 风格二维码验证：URL长度 >= 85 且 offset 79 匹配已知游戏
@@ -339,8 +363,7 @@ class StreamScanner(QThread):
                 self.qrcode_game_detected.emit(qr_data, int(game_type), app_id)
                 self.qrcode_detected.emit(qr_data)
 
-            time.sleep(0.01)  # 避免CPU占用过高
-
+        t.join(timeout=2)
         self.scan_finished.emit(True)
 
     def _make_ffmpeg_iter(self, ffmpeg: str):
@@ -369,7 +392,7 @@ class StreamScanner(QThread):
                     "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
 
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10 ** 6
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10 ** 7
             )
 
             frame_size = W * H * 3
@@ -434,10 +457,23 @@ class StreamScanner(QThread):
         return ""
 
     def _detect_qr(self, img: np.ndarray) -> str:
-        """检测并解码二维码"""
+        """检测并解码二维码（轻量：pyzbar 直接解码 + 灰度二值化重试 + OpenCV 兜底；
+        不做 2 倍放大等重策略，保证直播检测实时性）"""
         if USE_PYZBAR:
             try:
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                decoded_objects = qr_decode(img_rgb, symbols=[ZBarSymbol.QRCODE])
+                if decoded_objects:
+                    return decoded_objects[0].data.decode('utf-8')
+            except Exception:
+                pass
+
+            # 轻量重试：灰度 + 自适应二值化（直播画面常有压缩噪点，成本很低）
+            try:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                               cv2.THRESH_BINARY, 21, 5)
+                img_rgb = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
                 decoded_objects = qr_decode(img_rgb, symbols=[ZBarSymbol.QRCODE])
                 if decoded_objects:
                     return decoded_objects[0].data.decode('utf-8')
