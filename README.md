@@ -324,6 +324,7 @@ pyinstaller --onefile --windowed \
   - 保留 `cv2.VideoCapture` 作为系统无 FFmpeg 时的回退路径。
 - **直播流平台头（`ui/main_window.py` `start_stream_scan`）**：当平台为 BiliBili 时，向 `StreamScanner` 写入与 C++ 一致的 `User-Agent` / `Referer` / `Origin` 头。
 - **官服扫码头（`api/api.py` `panda_scan_qrcode`）**：补齐 C++ `PandaScanQRCode` 必发的 `x-rpc-app_id` 与 `x-rpc-device_id` 请求头，使 `panda/qrcode/scan` 返回有效的 `passport_qr_url`。
+- **支持了米哈游云游戏的扫码登录**：仅支持下载安装版本的云游戏，不支持浏览器版本的云游戏。
 
 > 说明：上述改动均为与 C++ `src`（C++ 版 `MHY_Scanner`）逐字段对齐，不涉及账号/登录协议逻辑变更。
 
@@ -337,19 +338,12 @@ pyinstaller --onefile --windowed \
 ## 开源协议
 
 本项目仅供学习交流使用，请勿用于非法用途。
-## 参考项目：
-- [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)  
-
-- [loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2)
-- [MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
 --- 
-
 
 ## 致谢
 
 - [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner) — 原始 C++ 版项目
 - [loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2) — C++ 二改版项目
-- [MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner) — Python 版项目
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) — Python GUI 框架
 - [OpenCV](https://opencv.org/) — 计算机视觉库
 - 所有贡献者和用户
