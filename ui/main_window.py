@@ -840,44 +840,112 @@ class MainWindow(QMainWindow):
         """
         检测到游戏二维码（来自 ScreenScanner/StreamScanner 的 qrcode_game_detected 信号）
         此信号已经在扫描器中经过 C++ 风格的验证（URL长度>=85 + offset 79 匹配游戏类型）
-        
-        C++ 对应：WindowMain::on_qrFound(const QString& data)
+
+        C++ 对应：QRCodeForScreen::LoginOfficial / QRCodeForStream::LoginOfficial
+        官方服流程：PandaScanQRCode(scanUrl,ticket,gameType) 获取 passport 二维码
+                  → ScanPassportQRLogin + ConfirmPassportQRLogin（使用已登录账号的 stoken/mid）
+        B服(崩坏3)流程：scanCheck + scanConfirm
         """
         qr_log(f"检测到二维码: 类型={GameType(game_type_val).name}, app_id={app_id}")
 
-        # C++ 风格: ticket = URL 最后24个字符
-        ticket = qr_data[-24:] if len(qr_data) >= 24 else ""
+        # 对齐 C++ parseOfficialQRCode：ticket 优先，否则 tk，或取末尾24字符
+        ticket = self._extract_ticket_from_qr(qr_data)
         if not ticket:
             qr_log("无法提取ticket", LogLevel.WARN)
             return
-
         qr_log(f"Ticket: {ticket}, app_id: {app_id}")
 
-        # C++ 风格: 游戏内二维码(app_id!=1)都需要先调用 scan 通知服务器"已扫描"
-        # 无论是否自动确认，这一步都必须做
-        if app_id != 1:
-            biz_key = ""
-            try:
-                parsed = urlparse(qr_data)
-                params = parse_qs(parsed.query)
-                biz_key = params.get("biz_key", [""])[0]
-                qr_log(f"biz_key={biz_key}", LogLevel.DEBUG)
-            except Exception as e:
-                qr_log(f"解析biz_key失败: {e}", LogLevel.WARN)
-            scan_result = self.api.scan_qrcode(ticket, app_id, biz_key)
-            qr_log(f"scan_qrcode 返回: {scan_result}", LogLevel.DEBUG)
-
-            if not scan_result:
-                gui_log("扫码确认失败！", LogLevel.WARN)
-                QMessageBox.warning(self, "提示", "扫码确认失败！")
-                return
-
-            # 游戏内二维码：scan → 直接 confirm（C++风格，无 query 轮询）
-            self._handle_game_qr_confirm(ticket, app_id, biz_key)
+        if not self.selected_account:
+            gui_log("请先选择一个账号", LogLevel.WARN)
+            QMessageBox.warning(self, "提示", "请先选择一个账号")
             return
 
-        # 自生成二维码 (app_id==1)：开始轮询等待扫码
-        self.process_qr_login(ticket, qr_data, app_id)
+        # 对齐 C++ QRCodeForScreen/Stream：按服务器类型分流
+        if self.selected_account.server_type == int(ServerType.BiliBili):
+            # 崩坏3 B服：scanCheck + scanConfirm
+            self.process_bilibili_login(ticket, qr_data)
+        else:
+            # 官服：PandaScan + passport 扫码/确认
+            self.process_official_screen_login(ticket, app_id)
+
+    @staticmethod
+    def _extract_ticket_from_qr(qr_data: str) -> str:
+        """从二维码URL提取 ticket（对齐 C++ parseOfficialQRCode: ticket → tk → 末尾24字符）"""
+        try:
+            parsed = urlparse(qr_data)
+            params = parse_qs(parsed.query)
+            t = params.get("ticket", [""])[0] or params.get("tk", [""])[0]
+            if t:
+                return t
+        except Exception:
+            pass
+        return qr_data[-24:] if len(qr_data) >= 24 else ""
+
+    def process_official_screen_login(self, ticket: str, app_id: int):
+        """官服屏幕/直播扫码登录（对齐 C++ LoginOfficial → PandaScanQRCode → continueLastLogin）
+
+        1. PandaScanQRCode：向游戏内二维码 scan 端点发送扫码请求，获取 passport 二维码 URL
+        2. 自动确认开启则直接继续；否则弹出确认对话框
+        3. ScanPassportQRLogin + ConfirmPassportQRLogin：使用已登录账号的 stoken/mid 完成授权
+        """
+        account = self.selected_account
+
+        # 对齐 C++ pBtstartScreen：开扫/使用前先校验 stoken 是否有效，
+        # 失效则直接中止（对应 C++ CheckStokenValid → "登录状态失效，请重新添加账号！"）
+        if not self.api.check_stoken_valid(account.token, account.mid):
+            gui_log("账号登录状态失效（stoken 校验失败）", LogLevel.ERROR)
+            QMessageBox.warning(self, "提示", "登录状态失效，\n请重新添加账号！")
+            return
+
+        scan_url = MhyApi.get_qrcode_scan_url(app_id)
+        qr_log(f"PandaScanQRCode: scan_url={scan_url}, app_id={app_id}", LogLevel.DEBUG)
+
+        passport_url = self.api.panda_scan_qrcode(scan_url, ticket, app_id)
+        if not passport_url:
+            gui_log("扫码确认失败！", LogLevel.WARN)
+            QMessageBox.warning(self, "提示", "扫码确认失败！")
+            return
+
+        # 停止扫描（与 C++ 检测到后即 stop() 一致）
+        if self.is_screen_scanning:
+            self.toggle_screen_scan()
+        if self.is_stream_scanning:
+            self.toggle_stream_scan()
+
+        # 手动确认：弹出对话框让用户确认（自动确认则跳过）
+        if not self.config.config.auto_login:
+            self._set_window_to_front()
+            game_name = self.GAME_NAMES.get(GameType(app_id), "未知游戏")
+            info = f"正在使用账号 {account.name}\n登录 {game_name}\n\n确认登录？"
+            reply = QMessageBox.question(
+                self, "登录确认", info,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                qr_log("用户取消确认")
+                return
+
+        # 对齐 C++ continueLastLogin：需要 mid 才能将 stoken 用于 passport 授权
+        if not account.mid:
+            qr_log("账号缺少 mid，无法完成 passport 扫码", LogLevel.WARN)
+            QMessageBox.warning(self, "错误", self.MID_HELP_TEXT)
+            return
+
+        ok = self.api.scan_passport_qr_login(passport_url, account.token, account.mid)
+        if not ok:
+            gui_log("扫码二次确认失败！", LogLevel.ERROR)
+            QMessageBox.warning(self, "提示", "扫码二次确认失败！")
+            return
+
+        ok = self.api.confirm_passport_qr_login(passport_url, account.token, account.mid)
+        if ok:
+            gui_log("扫码登录成功！")
+            QMessageBox.information(self, "成功", "扫码登录成功！")
+            if self.config.config.auto_exit:
+                self.close()
+        else:
+            gui_log("扫码确认失败！", LogLevel.ERROR)
+            QMessageBox.warning(self, "失败", "扫码确认失败！")
     
     @pyqtSlot(bool)
     def on_scan_finished(self, success: bool):
@@ -1242,14 +1310,26 @@ class MainWindow(QMainWindow):
         poll_log("轮询线程结束")
     
     def process_bilibili_login(self, ticket: str, qr_data: str):
-        """处理B站登录"""
+        """处理B站登录（对齐 C++ LoginBH3BiliBili → scanCheck + scanConfirm）"""
         # 崩坏3B站服登录
         uid = self.selected_account.uid
         token = self.selected_account.token
         name = self.selected_account.name
-        
+
+        # 停止扫描（与 C++ 检测到后即 stop() 一致）
+        if self.is_screen_scanning:
+            self.toggle_screen_scan()
+        if self.is_stream_scanning:
+            self.toggle_stream_scan()
+
+        # 对齐 C++ scanCheck：先通知服务器已扫描
+        if not self.api.bh3_qrcode_scan(ticket):
+            gui_log("扫码确认失败！", LogLevel.WARN)
+            QMessageBox.warning(self, "提示", "扫码确认失败！")
+            return
+
         result = self.api.bh3_qrcode_confirm(ticket, uid, token, name)
-        
+
         bili_log(f"B站登录结果: ticket={ticket[:12]}..., uid={uid}, result={result.name}", LogLevel.DEBUG, console_only=True)
         if result == ScanRet.SUCCESS:
             gui_log("扫码登录成功！")
@@ -1351,6 +1431,14 @@ class MainWindow(QMainWindow):
         # 启动 StreamScanner 从直播流中检测二维码
         self.stream_scanner = StreamScanner()
         self.stream_scanner.set_stream_url(self.current_stream_url)
+        # 对齐 C++ GetStreamLink：B站流必须带 Referer/Origin/User-Agent 头，否则 CDN 拒绝(403)
+        if platform == LivePlatform.BiliBili:
+            self.stream_scanner.set_headers({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                              "Chrome/126.0.0.0 Safari/537.36",
+                "Referer": "https://live.bilibili.com/",
+                "Origin": "https://live.bilibili.com",
+            })
         self.stream_scanner.qrcode_game_detected.connect(self.on_qrcode_detected)
         self.stream_scanner.scan_finished.connect(self.on_scan_finished)
         self.stream_scanner.scan_error.connect(self.on_scan_error)

@@ -38,6 +38,14 @@ def _safe_post(url: str, json_data: dict, headers: dict, timeout: int = 10):
         return requests.post(url, json=json_data, headers=headers, timeout=timeout)
 
 
+def _safe_get(url: str, headers: dict, timeout: int = 10):
+    """HTTP GET 请求（对齐 C++ cpr::Get — 每次新建连接，无持久 Session）"""
+    if _USE_CURL_CFFI:
+        return curl_requests.Session().get(url, headers=headers, timeout=timeout)  # type: ignore
+    else:
+        return requests.get(url, headers=headers, timeout=timeout)
+
+
 class GameType(IntEnum):
     """
     游戏类型 → API 端点映射
@@ -152,6 +160,8 @@ TAKUMI_BASE = "https://api-takumi.mihoyo.com"
 GAME_TOKEN = f"{TAKUMI_BASE}/auth/api/getGameToken"
 GAME_TOKEN_STOKEN = f"{TAKUMI_BASE}/account/ma-cn-session/app/getTokenByGameToken"
 MULTI_TOKEN = f"{TAKUMI_BASE}/auth/api/getMultiTokenByLoginTicket"
+# 校验 stoken 是否有效（对齐 C++ CheckStokenValid: getCookieAccountInfoBySToken）
+COOKIE_ACCOUNT_INFO = f"{TAKUMI_BASE}/auth/api/getCookieAccountInfoBySToken"
 
 # ── 短信登录 ───────────────────────────────────────────────────
 # 端点: passport-api.mihoyo.com
@@ -159,6 +169,13 @@ MULTI_TOKEN = f"{TAKUMI_BASE}/auth/api/getMultiTokenByLoginTicket"
 PASSPORT_BASE = "https://passport-api.mihoyo.com"
 SMS_CREATE = f"{PASSPORT_BASE}/account/ma-cn-verifier/verifier/createLoginCaptcha"
 SMS_LOGIN = f"{PASSPORT_BASE}/account/ma-cn-passport/app/loginByMobileCaptcha"
+
+# ── PandaScan + passport 扫码登录（对齐 C++ MhyApi.hpp / QRCodeForScreen） ──
+# 屏幕/直播扫码官服流程使用：先 PandaScanQRCode 获取 passport 二维码，
+# 再用已登录账号的 stoken/mid 完成 ScanPassportQRLogin + ConfirmPassportQRLogin
+PASSPORT_PANDA_APP_ID = "bll8iq97cem8"
+PASSPORT_SCAN_QR = f"{PASSPORT_BASE}/account/ma-cn-passport/app/scanQRLogin"
+PASSPORT_CONFIRM_QR = f"{PASSPORT_BASE}/account/ma-cn-passport/app/confirmQRLogin"
 
 # ── hoyolab / 米游社 扫码登录（新 passport API） ──────────────
 # 端点: passport-api.miyoushe.com
@@ -814,10 +831,153 @@ class MhyApi:
         except Exception as e:
             qr_log(f"[bh3_scan_confirm] 异常: {e}", LogLevel.ERROR)
             return False
-    
+
     # ═══════════════════════════════════════════════════════════════
+    # PandaScan + passport 扫码登录（对齐 C++ MhyApi.hpp）
+    # ═══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def get_qrcode_scan_url(app_id: int) -> str:
+        """根据 app_id 返回游戏内二维码 scan 端点（对齐 C++ setGameTypeByBizKey / setGameTypeByAppId）"""
+        if app_id == 1:
+            return BH3_QRCODE_SCAN
+        elif app_id == 4:
+            return HK4E_QRCODE_SCAN
+        elif app_id == 8:
+            return HKRPG_QRCODE_SCAN
+        elif app_id == 12:
+            return NAP_QRCODE_SCAN
+        return HK4E_QRCODE_SCAN
+
+    @staticmethod
+    def get_passport_qr_param(qr_code: str, key: str, terminators: str = "&") -> str:
+        """从 passport 二维码 URL 中提取参数（对齐 C++ getPassportQRParam）"""
+        needle = key + "="
+        begin = qr_code.find(needle)
+        if begin == -1:
+            return ""
+        value_begin = begin + len(needle)
+        value_end = len(qr_code)
+        for t in terminators:
+            idx = qr_code.find(t, value_begin)
+            if idx != -1:
+                value_end = idx
+                break
+        return qr_code[value_begin:value_end]
+
+    def panda_scan_qrcode(self, scan_url: str, ticket: str, app_id: int) -> str:
+        """
+        Panda 扫码（对齐 C++ PandaScanQRCode）
+
+        向游戏内二维码对应的 scan 端点发送扫码请求，返回 passport 二维码 URL
+        （passport_qr_url），后续用 ScanPassportQRLogin / ConfirmPassportQRLogin 处理。
+        请求体与 C++ 完全一致：passport_app_id + ticket + app_id + device + ts
+        """
+        if not scan_url or not ticket:
+            qr_log("[panda_scan] 缺少 scan_url 或 ticket", LogLevel.WARN)
+            return ""
+
+        data = {
+            "passport_app_id": PASSPORT_PANDA_APP_ID,
+            "ticket": ticket,
+            "app_id": int(app_id),
+            "device": self.device_id,
+            "ts": int(time.time()),
+        }
+        # 对齐 C++ PandaScanQRCode：必须带 x-rpc-app_id 与 x-rpc-device_id 头
+        headers = {
+            "Content-Type": "application/json",
+            "x-rpc-app_id": PASSPORT_PANDA_APP_ID,
+            "x-rpc-device_id": self.device_id,
+        }
+
+        try:
+            qr_log(f"[panda_scan] POST {scan_url}", LogLevel.DEBUG)
+            resp = _safe_post(scan_url, json_data=data, headers=headers)
+            result = resp.json()
+            qr_log(f"[panda_scan] response: {result}", LogLevel.DEBUG)
+
+            if result.get("retcode", -1) != 0:
+                qr_log(f"[panda_scan] retcode={result.get('retcode')} msg={result.get('message')}", LogLevel.WARN)
+                return ""
+
+            passport_url = result.get("data", {}).get("passport_qr_url", "")
+            qr_log(f"[panda_scan] passport_qr_url={'有' if passport_url else '无'}", LogLevel.DEBUG)
+            return passport_url
+        except Exception as e:
+            qr_log(f"[panda_scan] 异常: {e}", LogLevel.ERROR)
+            return ""
+
+    def _passport_qr_login(self, passport_qr_url: str, stoken: str, mid: str, confirm: bool) -> bool:
+        """
+        passport 扫码/确认（对齐 C++ PassportQRCodeLogin）
+
+        ticket = passport 二维码中的 tk 参数
+        token_types = passport 二维码中的 token_types 参数（以 # 结尾）
+        POST passport-api.mihoyo.com/.../app/{scan|confirm}QRLogin，带 stoken;mid Cookie
+        """
+        ticket = self.get_passport_qr_param(passport_qr_url, "tk", "&")
+        token_types = self.get_passport_qr_param(passport_qr_url, "token_types", "#")
+        if not ticket or not token_types:
+            qr_log("[passport_qr] 缺少 tk 或 token_types 参数", LogLevel.WARN)
+            return False
+
+        cookie = f"stoken={stoken};mid={mid}"
+        body = {
+            "ticket": ticket,
+            "token_types": [token_types],
+        }
+        url = PASSPORT_CONFIRM_QR if confirm else PASSPORT_SCAN_QR
+        headers = {
+            "Content-Type": "application/json",
+            "x-rpc-app_id": PASSPORT_PANDA_APP_ID,
+            "x-rpc-device_id": self.device_id,
+            "Cookie": cookie,
+        }
+
+        phase = "confirm" if confirm else "scan"
+        try:
+            resp = _safe_post(url, json_data=body, headers=headers)
+            result = resp.json()
+            qr_log(f"[passport_qr_{phase}] response: {result}", LogLevel.DEBUG)
+            return result.get("retcode", -1) == 0
+        except Exception as e:
+            qr_log(f"[passport_qr_{phase}] 异常: {e}", LogLevel.ERROR)
+            return False
+
+    def scan_passport_qr_login(self, passport_qr_url: str, stoken: str, mid: str) -> bool:
+        """passport 扫码（对齐 C++ ScanPassportQRLogin）"""
+        return self._passport_qr_login(passport_qr_url, stoken, mid, False)
+
+    def confirm_passport_qr_login(self, passport_qr_url: str, stoken: str, mid: str) -> bool:
+        """passport 确认登录（对齐 C++ ConfirmPassportQRLogin）"""
+        return self._passport_qr_login(passport_qr_url, stoken, mid, True)
+
+    def check_stoken_valid(self, stoken: str, mid: str) -> bool:
+        """
+        校验 stoken 是否有效（对齐 C++ CheckStokenValid）
+
+        C++ 在开扫前(pBtstartScreen)就会调用此检查，stoken 失效则直接报
+        "登录状态失效，请重新添加账号！" 并中止，根本不会发起扫码请求。
+        GET api-takumi.mihoyo.com/auth/api/getCookieAccountInfoBySToken
+        Cookie: stoken=...;mid=...  返回 retcode==0 视为有效。
+        """
+        if not stoken or not mid:
+            return False
+        cookie = f"stoken={stoken};mid={mid}"
+        headers = {"Accept": "application/json", "Cookie": cookie}
+        try:
+            resp = _safe_get(COOKIE_ACCOUNT_INFO, headers=headers)
+            j = resp.json()
+            qr_log(f"[check_stoken] response: {j}", LogLevel.DEBUG)
+            return j.get("retcode", -1) == 0
+        except Exception as e:
+            qr_log(f"[check_stoken] 异常: {e}", LogLevel.ERROR)
+            return False
+
+    # ═══════════════════════════════════════════════════
     # hoyolab / 米游社 扫码登录（新 passport API）
-    # ═══════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════
     # 与旧 hk4e-sdk API 的核心区别：
     #   1. 端点变为 passport-api.miyoushe.com
     #   2. 状态名: Created (未扫) / Scanned (已扫) / Confirmed (确认)

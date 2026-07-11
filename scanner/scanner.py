@@ -4,6 +4,8 @@
 """
 import os
 import time
+import shutil
+import subprocess
 import traceback
 import cv2
 import numpy as np
@@ -235,6 +237,8 @@ class StreamScanner(QThread):
         self._frame_count = 0
         self._skip_frames = 5  # 每隔几帧检测一次
         self._used_tickets = set()  # 已处理的ticket，防止重复检测
+        self._headers = {}          # 打开直播流所需的 HTTP 头（对齐 C++ GetStreamLink 的 heards）
+        self._proc = None           # ffmpeg 子进程（对齐 C++ avformat_open_input）
         
         # 二维码检测器
         self.detector = cv2.QRCodeDetector()
@@ -242,81 +246,177 @@ class StreamScanner(QThread):
     def set_stream_url(self, url: str):
         """设置直播流URL"""
         self._stream_url = url
+
+    def set_headers(self, headers: dict):
+        """设置打开直播流所需的 HTTP 头（对齐 C++ GetStreamLink：B站流必须带 Referer/Origin/User-Agent）"""
+        self._headers = headers or {}
     
     def stop(self):
         """停止扫描"""
         self._running = False
+        self._cleanup_proc()
     
+    def _cleanup_proc(self):
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+                if self._proc.stdout:
+                    self._proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+
     def run(self):
         """开始扫描"""
         self._running = True
         self._last_ticket = ""
-        
+
         if not self._stream_url:
             self.scan_error.emit("未设置直播流URL")
             self.scan_finished.emit(False)
             return
-        
-        try:
-            # 使用OpenCV打开流
-            cap = cv2.VideoCapture(self._stream_url)
-            
-            if not cap.isOpened():
+
+        # 对齐 C++ QRCodeForStream：优先用 ffmpeg（avformat_open_input）打开直播流，
+        # B站流需带 Referer/Origin/User-Agent 头；无 ffmpeg 时回退 cv2.VideoCapture。
+        frame_iter = None
+        open_err = ""
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            frame_iter, open_err = self._make_ffmpeg_iter(ffmpeg)
+            if frame_iter is None:
+                scanner_log(f"[StreamScanner] ffmpeg 打开失败: {open_err}", LogLevel.WARN)
+        if frame_iter is None:
+            frame_iter, open_err = self._make_cv2_iter()
+            if frame_iter is None:
                 self.scan_error.emit("无法打开直播流")
                 self.scan_finished.emit(False)
                 return
-            
-            self.stream_status.emit("正在连接直播流...")
-            
-            while self._running:
-                ret, frame = cap.read()
-                
-                if not ret:
-                    self.stream_status.emit("直播流已断开")
-                    self.scan_error.emit("直播流断开")
-                    break
-                
-                self._frame_count += 1
-                
-                # 每隔几帧检测一次
-                if self._frame_count % self._skip_frames == 0:
-                    # 缩放到1280x720
-                    h, w = frame.shape[:2]
-                    scale_w = 1280 / w if w > 1280 else 1.0
-                    scale_h = 720 / h if h > 720 else 1.0
-                    scale = min(scale_w, scale_h)
-                    if scale != 1.0:
-                        frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
 
-                    # 检测并解码二维码
-                    qr_data = self._detect_qr(frame)
+        self.stream_status.emit("正在连接直播流...")
 
-                    # C++ 风格二维码验证：URL长度 >= 85 且 offset 79 匹配已知游戏
-                    if qr_data and len(qr_data) >= 85:
-                        game_type, app_id = get_game_type_from_url(qr_data)
-                        if game_type == GameType.UNKNOW:
-                            continue
+        for frame in frame_iter:
+            if not self._running:
+                break
 
-                        # C++ 风格: ticket = URL 最后24个字符
-                        ticket = qr_data[-24:]
+            self._frame_count += 1
 
-                        # C++ 风格: 防重复 lastTicket
-                        if ticket and ticket == self._last_ticket:
-                            continue
-                        self._last_ticket = ticket
+            # 每隔几帧检测一次
+            if self._frame_count % self._skip_frames != 0:
+                continue
 
-                        scanner_log(f"直播流检测到游戏二维码 (帧数={self._frame_count}, 类型={game_type.name}, app_id={app_id})")
-                        self.qrcode_game_detected.emit(qr_data, int(game_type), app_id)
-                        self.qrcode_detected.emit(qr_data)
-                
-                time.sleep(0.01)  # 避免CPU占用过高
-            
-            cap.release()
-            
-        except Exception as e:
-            self.scan_error.emit(str(e))
-        
+            # ffmpeg 路径已统一缩放到 1280x720；cv2 路径按需缩放
+            if frame.shape[1] > 1280 or frame.shape[0] > 720:
+                h, w = frame.shape[:2]
+                scale = min(1280 / w if w > 1280 else 1.0, 720 / h if h > 720 else 1.0)
+                if scale != 1.0:
+                    frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+
+            # 检测并解码二维码
+            qr_data = self._detect_qr(frame)
+
+            # C++ 风格二维码验证：URL长度 >= 85 且 offset 79 匹配已知游戏
+            if qr_data and len(qr_data) >= 85:
+                game_type, app_id = get_game_type_from_url(qr_data)
+                if game_type == GameType.UNKNOW:
+                    continue
+
+                # C++ 风格: ticket = URL 最后24个字符
+                ticket = qr_data[-24:]
+
+                # C++ 风格: 防重复 lastTicket
+                if ticket and ticket == self._last_ticket:
+                    continue
+                self._last_ticket = ticket
+
+                scanner_log(f"直播流检测到游戏二维码 (帧数={self._frame_count}, 类型={game_type.name}, app_id={app_id})")
+                self.qrcode_game_detected.emit(qr_data, int(game_type), app_id)
+                self.qrcode_detected.emit(qr_data)
+
+            time.sleep(0.01)  # 避免CPU占用过高
+
         self.scan_finished.emit(True)
+
+    def _make_ffmpeg_iter(self, ffmpeg: str):
+        """用 ffmpeg 子进程管道打开直播流（对齐 C++ setUrl + avformat_open_input）。
+        返回 (生成器, None) 成功，或 (None, 错误描述) 失败。"""
+        try:
+            W, H = 1280, 720
+            # 对齐 C++ QRCodeForStream::setUrl 的 ffmpeg 选项
+            cmd = [
+                ffmpeg, "-v", "error",
+                "-rw_timeout", "5000000",   # 读超时 5s
+                "-probesize", "1024",
+                "-max_delay", "0",
+                "-fflags", "+nobuffer",
+                "-flags", "low_delay",
+            ]
+            # 对齐 C++ GetStreamLink：B站流带 Referer/Origin/User-Agent
+            ua = self._headers.get("User-Agent")
+            if ua:
+                cmd += ["-user_agent", ua]
+            if self._headers:
+                hdr = "".join(f"{k}: {v}\r\n" for k, v in self._headers.items())
+                cmd += ["-headers", hdr]
+            cmd += ["-i", self._stream_url,
+                    "-vf", f"scale={W}:{H}",
+                    "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10 ** 6
+            )
+
+            frame_size = W * H * 3
+            first = self._proc.stdout.read(frame_size)
+            if not first or len(first) < frame_size:
+                rc = self._proc.poll()
+                self._cleanup_proc()
+                return None, f"ffmpeg 打开失败(退出码 {rc})" if rc is not None else "ffmpeg 读取首帧失败"
+
+            first_frame = np.frombuffer(first, dtype=np.uint8).reshape(H, W, 3)
+
+            def gen():
+                try:
+                    yield first_frame
+                    while self._running:
+                        raw = self._proc.stdout.read(frame_size)
+                        if not raw or len(raw) < frame_size:
+                            self.stream_status.emit("直播流已断开")
+                            break
+                        yield np.frombuffer(raw, dtype=np.uint8).reshape(H, W, 3)
+                finally:
+                    self._cleanup_proc()
+
+            return gen(), None
+        except Exception as e:
+            self._cleanup_proc()
+            return None, str(e)
+
+    def _make_cv2_iter(self):
+        """回退：用 OpenCV 打开直播流（无法携带自定义 HTTP 头）"""
+        cap = cv2.VideoCapture(self._stream_url)
+        if not cap.isOpened():
+            cap.release()
+            return None, "cv2 无法打开直播流"
+
+        def gen():
+            try:
+                while self._running:
+                    ret, frame = cap.read()
+                    if not ret:
+                        self.stream_status.emit("直播流已断开")
+                        break
+                    yield frame
+            finally:
+                cap.release()
+
+        return gen(), None
     
     def reset_last_qr(self):
         """重置上一个二维码数据"""
