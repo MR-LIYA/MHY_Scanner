@@ -15,7 +15,7 @@ from core.logger import update_log, error, LogLevel
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 class UpdateManager:
     """热更新管理器"""
     # GitHub Release API
