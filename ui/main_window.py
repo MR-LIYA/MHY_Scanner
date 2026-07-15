@@ -1656,30 +1656,8 @@ class MainWindow(QMainWindow):
             F"<p>本项目参考项目: <a href='{self.GITHUB_URL}'>{self.GITHUB_URL}</a>制作</p>"
         )
 
-    # def show_changelog(self):
-    #     """显示更新日志"""
-    #     dialog = QDialog(self)
-    #     dialog.setWindowTitle("更新日志")
-    #     dialog.setFixedSize(500, 400)
-    #     dialog.setSizeGripEnabled(False)
-
-    #     layout = QVBoxLayout(dialog)
-
-    #     app = QApplication.instance()
-    #     ver_label = QLabel(f"<b>{app.applicationName()} v{app.applicationVersion()}</b>")
-    #     layout.addWidget(ver_label)
-
-    #     changelog = QTextEdit()
-    #     changelog.setReadOnly(True)
-    #     changelog.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-    #     changelog.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    #     changelog.viewport().setCursor(Qt.CursorShape.ArrowCursor)
-    #     changelog.setHtml(CHANGELOG_HTML)
-    #     layout.addWidget(changelog)
-
-    #     dialog.exec()
     def show_changelog(self):
-        """更新日志：纯布局无分割器，彻底消除拉伸鼠标，窗口固定不可缩放，列表选中蓝底无黑框"""
+        """更新日志：固定窗口、无拖拽分割线、全局箭头光标、禁用文本选中、禁用全部右键"""
         from PyQt6.QtWidgets import (
             QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QTextEdit, QFrame
         )
@@ -1690,7 +1668,6 @@ class MainWindow(QMainWindow):
         dlg.setWindowTitle("更新日志")
         fixed_win_w = 850
         fixed_win_h = 600
-        dlg.resize(fixed_win_w, fixed_win_h)
         dlg.setFixedSize(fixed_win_w, fixed_win_h)
 
         main_layout = QVBoxLayout(dlg)
@@ -1701,14 +1678,14 @@ class MainWindow(QMainWindow):
         h_layout.setSpacing(0)
         h_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ========== 左侧固定200px版本列表 ==========
+        # ========== 左侧版本列表 ==========
         left_frame = QFrame()
         left_frame.setFixedWidth(200)
         left_layout = QVBoxLayout(left_frame)
         left_layout.setContentsMargins(6, 6, 6, 6)
 
         list_widget = QListWidget()
-        # 样式修改：移除所有边框，选中仅蓝底无轮廓黑框
+        # 删掉所有cursor样式，只保留外观样式
         list_widget.setStyleSheet("""
             QListWidget {
                 border: none;
@@ -1739,22 +1716,27 @@ class MainWindow(QMainWindow):
             version_map[idx] = html_content
         left_layout.addWidget(list_widget)
 
-        # ========== 中间纯视觉分隔细线 ==========
+        # ========== 中间分隔细线 ==========
         divider = QFrame()
         divider.setFixedWidth(1)
         divider.setStyleSheet("background:#dddddd;")
 
-        # ========== 右侧日志详情 ==========
+        # ========== 右侧日志文本框 ==========
         right_frame = QFrame()
         right_layout = QVBoxLayout(right_frame)
         right_layout.setContentsMargins(6, 6, 6, 6)
 
         text_view = QTextEdit()
         text_view.setReadOnly(True)
+        # 基础样式
         text_view.setStyleSheet("border:none; padding:8px; font-size:14px;")
+        # 禁止获取焦点，消除文本类型光标
+        text_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        text_view.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        text_view.viewport().setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         right_layout.addWidget(text_view)
 
-        # 组装左右布局
+        # 组装布局
         h_layout.addWidget(left_frame)
         h_layout.addWidget(divider)
         h_layout.addWidget(right_frame, stretch=1)
@@ -1764,18 +1746,31 @@ class MainWindow(QMainWindow):
         list_widget.setCurrentRow(0)
         text_view.setHtml(version_map[0])
 
-        # 切换日志内容
+        # 切换版本逻辑
         def on_version_selected(row):
             html_data = version_map.get(row, "")
             text_view.setHtml(html_data)
         list_widget.currentRowChanged.connect(on_version_selected)
 
-        # 统一普通箭头光标
-        normal_cursor = QCursor(Qt.CursorShape.ArrowCursor)
-        dlg.setCursor(normal_cursor)
-        left_frame.setCursor(normal_cursor)
-        divider.setCursor(normal_cursor)
-        right_frame.setCursor(normal_cursor)
+        # 统一全局箭头光标
+        arrow_cursor = QCursor(Qt.CursorShape.ArrowCursor)
+        dlg.setCursor(arrow_cursor)
+        left_frame.setCursor(arrow_cursor)
+        divider.setCursor(arrow_cursor)
+        right_frame.setCursor(arrow_cursor)
+        list_widget.setCursor(arrow_cursor)
+        text_view.setCursor(arrow_cursor)
+
+        # 拦截所有右键菜单
+        def block_right_click(event):
+            event.accept()
+
+        dlg.contextMenuEvent = block_right_click
+        list_widget.contextMenuEvent = block_right_click
+        text_view.contextMenuEvent = block_right_click
+        left_frame.contextMenuEvent = block_right_click
+        right_frame.contextMenuEvent = block_right_click
+        divider.contextMenuEvent = block_right_click
 
         dlg.exec()
     
