@@ -25,6 +25,7 @@ from .login_window import LoginWindow
 from utils.update import restart_program
 from core.logger import scanner_log, qr_log, main_log, poll_log, bili_log, gui_log, debug, info, warn, error, LogLevel
 from core.logger import Logger
+from .text_constants import MID_HELP_TEXT, CHANGELOG_LIST
 
 class QRCodePollingWorker(QObject):
     """二维码轮询工作线程"""
@@ -188,49 +189,6 @@ class MainWindow(QMainWindow):
         GameType.HonkaiStarRail: "星穹铁道",
         GameType.ZenlessZoneZero: "绝区零",
     }
-
-    MID_HELP_TEXT = (
-        "当前账号缺少 MID，无法获取登录凭证！\n\n"
-        "请输入 MID 后再试。获取 MID 的方法：\n"
-        "1. 浏览器打开 https://user.mihoyo.com\n"
-        "2. 登录后，地址栏中 ?login_ticket=... 之后的数字串就是 MID\n"
-        "3. 也可以尝试 https://api-takumi.mihoyo.com/account/wapi/getUserInfo?stoken=你的stoken\n"
-        "（响应中的 data.user_info.aid 即为 MID）\n\n"
-        "添加 MID：右键账号 → 编辑MID"
-    )
-
-    CHANGELOG_HTML = """
-            <h3>v1.0.4 (2026-07)</h3>
-            <p>近期改动聚焦「严格对齐 C++ 版 `src` 的 api 与扫码两个模块」，修复了直播流扫码无法打开、以及官服扫码缺头导致校验不稳定的问题。</p>
-            <ul>
-                <li>
-                    <strong>直播流扫描（`scanner/scanner.py` `StreamScanner`）</strong>：
-                    <ul>
-                        <li>由原来直接用 `cv2.VideoCapture(url)` 打开直播流，改为<strong>优先使用 FFmpeg 子进程管道</strong>（`ffmpeg -i ... -f rawvideo`）读取帧，对应 C++ `QRCodeForStream::setUrl` / `avformat_open_input` 的实现。</li>
-                        <li>新增 `set_headers()`，按平台注入 HTTP 头。对齐 C++ `WindowMain::GetStreamLink`：B 站流必须带 `User-Agent` / `Referer: https://live.bilibili.com/` / `Origin: https://live.bilibili.com`，否则 `bilivideo.com` CDN 返回 403、OpenCV 无法打开流（原「无法打开直播流」报错的根因）。</li>
-                        <li>对齐 C++ 的 FFmpeg 低延迟选项：`rw_timeout=5000000`、`probesize=1024`、`max_delay=0`、`+nobuffer` / `low_delay`。</li>
-                        <li>帧统一缩放为 1280×720 供二维码检测；停止扫描时正确 `terminate` FFmpeg 子进程，避免残留。</li>
-                        <li>保留 `cv2.VideoCapture` 作为系统无 FFmpeg 时的回退路径。</li>
-                    </ul>
-                </li>
-                <li>
-                    <strong>直播流平台头（`ui/main_window.py` `start_stream_scan`）</strong>：
-                    <ul>
-                        <li>当平台为 BiliBili 时，向 `StreamScanner` 写入与 C++ 一致的 `User-Agent` / `Referer` / `Origin` 头。</li>
-                    </ul>
-                </li>
-                <li>
-                    <strong>官服扫码头（`api/api.py` `panda_scan_qrcode`）</strong>：
-                    <ul>
-                        <li>补齐 C++ `PandaScanQRCode` 必发的 `x-rpc-app_id` 与 `x-rpc-device_id` 请求头，使 `panda/qrcode/scan` 返回有效的 `passport_qr_url`。</li>
-                    </ul>
-                </li>
-                <li>支持了米哈游云游戏的扫码登录：仅支持下载安装版本的云游戏，不支持浏览器版本的云游戏。</li>
-            </ul>
-            <p style="color:#666;font-size:13px;margin-top:10px;">说明：上述改动均为与 C++ `src`（C++ 版 `MHY_Scanner`）逐字段对齐，不涉及账号/登录协议逻辑变更。</p>
-            <hr>
-            <p style='color:gray;font-size:12px;'>本项目为参考项目改进而来，修复了已知 BUG。</p>
-        """
 
     @staticmethod
     def _create_default_pixmap() -> QPixmap:
@@ -951,7 +909,7 @@ class MainWindow(QMainWindow):
         # 对齐 C++ continueLastLogin：需要 mid 才能将 stoken 用于 passport 授权
         if not account.mid:
             qr_log("账号缺少 mid，无法完成 passport 扫码", LogLevel.WARN)
-            QMessageBox.warning(self, "错误", self.MID_HELP_TEXT)
+            QMessageBox.warning(self, "错误", MID_HELP_TEXT)
             return
 
         ok = self.api.scan_passport_qr_login(passport_url, account.token, account.mid)
@@ -1247,7 +1205,7 @@ class MainWindow(QMainWindow):
         # C++ 中如果获取失败直接 AccountError 并 return
         if not account.mid:
             qr_log("账号缺少 mid，无法将 stoken 转换为 game_token", LogLevel.WARN)
-            QMessageBox.warning(self, "错误", self.MID_HELP_TEXT)
+            QMessageBox.warning(self, "错误", MID_HELP_TEXT)
             return
 
         try:
@@ -1698,28 +1656,128 @@ class MainWindow(QMainWindow):
             F"<p>本项目参考项目: <a href='{self.GITHUB_URL}'>{self.GITHUB_URL}</a>制作</p>"
         )
 
+    # def show_changelog(self):
+    #     """显示更新日志"""
+    #     dialog = QDialog(self)
+    #     dialog.setWindowTitle("更新日志")
+    #     dialog.setFixedSize(500, 400)
+    #     dialog.setSizeGripEnabled(False)
+
+    #     layout = QVBoxLayout(dialog)
+
+    #     app = QApplication.instance()
+    #     ver_label = QLabel(f"<b>{app.applicationName()} v{app.applicationVersion()}</b>")
+    #     layout.addWidget(ver_label)
+
+    #     changelog = QTextEdit()
+    #     changelog.setReadOnly(True)
+    #     changelog.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+    #     changelog.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    #     changelog.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+    #     changelog.setHtml(CHANGELOG_HTML)
+    #     layout.addWidget(changelog)
+
+    #     dialog.exec()
     def show_changelog(self):
-        """显示更新日志"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("更新日志")
-        dialog.setFixedSize(500, 400)
-        dialog.setSizeGripEnabled(False)
+        """更新日志：纯布局无分割器，彻底消除拉伸鼠标，窗口固定不可缩放，列表选中蓝底无黑框"""
+        from PyQt6.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QTextEdit, QFrame
+        )
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QCursor
 
-        layout = QVBoxLayout(dialog)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("更新日志")
+        fixed_win_w = 850
+        fixed_win_h = 600
+        dlg.resize(fixed_win_w, fixed_win_h)
+        dlg.setFixedSize(fixed_win_w, fixed_win_h)
 
-        app = QApplication.instance()
-        ver_label = QLabel(f"<b>{app.applicationName()} v{app.applicationVersion()}</b>")
-        layout.addWidget(ver_label)
+        main_layout = QVBoxLayout(dlg)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        changelog = QTextEdit()
-        changelog.setReadOnly(True)
-        changelog.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        changelog.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        changelog.viewport().setCursor(Qt.CursorShape.ArrowCursor)
-        changelog.setHtml(self.CHANGELOG_HTML)
-        layout.addWidget(changelog)
+        # 外层水平布局
+        h_layout = QHBoxLayout()
+        h_layout.setSpacing(0)
+        h_layout.setContentsMargins(0, 0, 0, 0)
 
-        dialog.exec()
+        # ========== 左侧固定200px版本列表 ==========
+        left_frame = QFrame()
+        left_frame.setFixedWidth(200)
+        left_layout = QVBoxLayout(left_frame)
+        left_layout.setContentsMargins(6, 6, 6, 6)
+
+        list_widget = QListWidget()
+        # 样式修改：移除所有边框，选中仅蓝底无轮廓黑框
+        list_widget.setStyleSheet("""
+            QListWidget {
+                border: none;
+                outline: none;
+            }
+            QListWidget::item {
+                padding:8px 6px;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item:selected {
+                background:#e6f0ff;
+                color:#0058cc;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item:focus {
+                outline: none;
+                border: none;
+            }
+        """)
+        version_map = {}
+        for idx, ver_info in enumerate(CHANGELOG_LIST):
+            title = ver_info["version_title"]
+            html_content = ver_info["html"]
+            item = QListWidgetItem(title)
+            list_widget.addItem(item)
+            version_map[idx] = html_content
+        left_layout.addWidget(list_widget)
+
+        # ========== 中间纯视觉分隔细线 ==========
+        divider = QFrame()
+        divider.setFixedWidth(1)
+        divider.setStyleSheet("background:#dddddd;")
+
+        # ========== 右侧日志详情 ==========
+        right_frame = QFrame()
+        right_layout = QVBoxLayout(right_frame)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+
+        text_view = QTextEdit()
+        text_view.setReadOnly(True)
+        text_view.setStyleSheet("border:none; padding:8px; font-size:14px;")
+        right_layout.addWidget(text_view)
+
+        # 组装左右布局
+        h_layout.addWidget(left_frame)
+        h_layout.addWidget(divider)
+        h_layout.addWidget(right_frame, stretch=1)
+        main_layout.addLayout(h_layout)
+
+        # 默认选中最新版本
+        list_widget.setCurrentRow(0)
+        text_view.setHtml(version_map[0])
+
+        # 切换日志内容
+        def on_version_selected(row):
+            html_data = version_map.get(row, "")
+            text_view.setHtml(html_data)
+        list_widget.currentRowChanged.connect(on_version_selected)
+
+        # 统一普通箭头光标
+        normal_cursor = QCursor(Qt.CursorShape.ArrowCursor)
+        dlg.setCursor(normal_cursor)
+        left_frame.setCursor(normal_cursor)
+        divider.setCursor(normal_cursor)
+        right_frame.setCursor(normal_cursor)
+
+        dlg.exec()
     
     def open_github_issues(self):
         """打开GitHub Issues"""

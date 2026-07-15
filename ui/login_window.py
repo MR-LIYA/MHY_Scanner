@@ -20,7 +20,6 @@ from PyQt6.QtWidgets import (
     QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
-
 from api import MhyApi, ServerType, GameType, LoginQRCodeState, BSGameSDK
 from core.config import Account
 from core.logger import qr_log, gui_log, error, LogLevel
@@ -138,7 +137,7 @@ class LoginWindow(QDialog):
         # Tab 0: 短信登录
         self.tab_sms = self.create_sms_tab()
         self.tabs.addTab(self.tab_sms, "短信登录")
-        self.tabs.tabBar().setTabVisible(0, True)
+        self.tabs.tabBar().setTabVisible(0, False)
 
         # Tab 1: 扫码登录
         self.tab_qr = self.create_qr_tab()
@@ -440,17 +439,21 @@ class LoginWindow(QDialog):
         self.sms_confirm_btn.setText("登录中...")
 
         def do_login():
-            retcode, v2_token, uid, mid = self.api.login_by_sms(
+            # 调用新增的5返回值方法，与定义完全对应
+            retcode, cookie_token, stoken, uid, mid = self.api.login_by_sms_get_stoken(
                 phone, code, getattr(self, "sms_action_type", "")
             )
 
             if retcode == 0:
-                self.sms_login_result.emit(True, "", uid, v2_token, mid)
+                # 优先传递 stoken，为空则用 cookie_token 兜底
+                token_to_pass = stoken if stoken else cookie_token
+                self.sms_login_result.emit(True, "", uid, token_to_pass, mid)
             elif retcode == -3205:
                 self.sms_login_result.emit(False, "验证码错误", "", "", "")
             else:
                 self.sms_login_result.emit(False, f"登录失败 (code={retcode})", "", "", "")
 
+        # 启动子线程执行登录
         threading.Thread(target=do_login, daemon=True).start()
 
     def _on_sms_login_result(self, success: bool, msg: str, uid: str, token: str, mid: str):
