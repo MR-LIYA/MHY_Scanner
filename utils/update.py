@@ -15,7 +15,7 @@ from core.logger import update_log, error, LogLevel
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 class UpdateManager:
     """热更新管理器"""
     # GitHub Release API
@@ -24,8 +24,8 @@ class UpdateManager:
     GITCODE_V5_API = "https://api.gitcode.com/api/v5/repos/MR-LIYA/MHY_Scanner/releases?per_page=1"
     
     # 安装包直链
-    GITHUB_INSTALLER_URL = "https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe"
-    GITCODE_INSTALLER_URL = "https://gitcode.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe"
+    GITHUB_INSTALLER_URL = "https://github.com/MR-LIYA/MHY_Scanner/releases/download/V1.0.5/MHY_Scanner_Setup.exe"
+    GITCODE_INSTALLER_URL = "https://gitcode.com/MR-LIYA/MHY_Scanner/releases/download/V1.0.5/MHY_Scanner_Setup.exe"
 
     def __init__(self):
         self.script_path = os.path.abspath(__file__)
