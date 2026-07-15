@@ -4,11 +4,11 @@
 
 参考 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)（C++ 版）改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
 
-> **最新版本**: v1.0.4
+> **最新版本**: v1.0.5
 >
-> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe)
-
-> **项目主页**: [https://github.com/MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
+> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/V1.0.5/MHY_Scanner_Setup.exe)
+>
+> **项目主页**: [MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
 首次运行时需要等待一会，以便产生对应的配置文件。
 
 ---
@@ -16,7 +16,7 @@
 ## 功能特性
 
 - **扫码登录**：基于 hoyolab Passport API，米游社 APP 扫码后确认即返回 Token，无需额外转换步骤
-- **短信登录**：支持手机号 + 验证码登录
+- **短信登录**：支持手机号 + 验证码登录（接口问题暂时停用）
 - **Cookie 登录**：支持粘贴 SToken Cookie 直接登录（stuid + stoken + mid）
 - **B站崩坏3登录**：支持 BiliBili 服账号密码登录
 - **Cookie 刷新**：支持抖音/B站 Cookie 刷新（设置 → 刷新Cookie）
@@ -312,6 +312,10 @@ pyinstaller --onefile --windowed \
 
 ## 更新日志
 
+### v1.0.5 (2026-07)
+
+- 此版本暂时禁用了验证码登陆选项，验证码登录只能登陆程序，扫码时会有问题。
+
 ### v1.0.4 (2026-07)
 
 近期改动聚焦「严格对齐 C++ 版 `src` 的 api 与扫码两个模块」，修复了直播流扫码无法打开、以及官服扫码缺头导致校验不稳定的问题。
@@ -337,8 +341,8 @@ pyinstaller --onefile --windowed \
 
 ## 开源协议
 
-本项目仅供学习交流使用，请勿用于非法用途。
---- 
+本项目仅供学习交流使用，请勿用于非法用途
+---
 
 ## 致谢
 
