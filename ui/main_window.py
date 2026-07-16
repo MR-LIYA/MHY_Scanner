@@ -1581,22 +1581,30 @@ class MainWindow(QMainWindow):
         info = check_for_updates()
         if info.get("check_failed"):
             gui_log("检查更新失败，请检查网络连接")
-            QMessageBox.warning(self, "检查更新", "检查更新失败，无法连接到 GitHub。\n请检查网络连接后重试。")
+            QMessageBox.warning(self, "检查更新", "检查更新失败，无法连接到 GitHub/GitCode。\n请检查网络连接后重试。")
         elif info.get("no_release"):
             gui_log("仓库暂无 Release 版本")
-            QMessageBox.information(self, "检查更新", "GitHub 仓库尚未发布任何 Release 版本，暂无更新源。")
+            QMessageBox.information(self, "检查更新", "仓库尚未发布任何 Release 版本，暂无更新源。")
         elif info["has_update"]:
             gui_log(f"发现新版本: {info['latest_version']}")
-            reply = QMessageBox.information(
-                self, "发现新版本",
-                f"当前版本: {info['current_version']}\n"
-                f"最新版本: {info['latest_version']}\n\n"
-                f"是否立即下载更新？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                # 后台线程下载，避免 UI 卡死
-                self._start_download_update(info["download_url"])
+            current_ver = info['current_version']
+            latest_ver = info['latest_version']
+            dl_url = info["download_url"]
+            msg_text = f"当前版本: {current_ver}\n最新版本: {latest_ver}"
+            # 判断是否存在exe下载链接
+            if not dl_url:
+                msg_text += "\n\n⚠ 该版本未上传exe安装包，暂不支持自动下载更新"
+                QMessageBox.information(self, "发现新版本", msg_text)
+            else:
+                msg_text += "\n\n是否立即下载更新？"
+                reply = QMessageBox.question(
+                    self, "发现新版本",
+                    msg_text,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    # 后台线程下载，避免 UI 卡死
+                    self._start_download_update(dl_url)
         else:
             gui_log("当前已是最新版本")
             QMessageBox.information(self, "检查更新", "当前已是最新版本")
