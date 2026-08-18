@@ -23,9 +23,8 @@ from .cookie_refresh_dialog import CookieRefreshDialog
 from api import MhyApi, GameType, ServerType, ScanRet, LoginQRCodeState
 from .login_window import LoginWindow
 from utils.update import restart_program
-from core.logger import scanner_log, qr_log, main_log, poll_log, bili_log, gui_log, debug, info, warn, error, LogLevel
-from core.logger import Logger
-from .text_constants import MID_HELP_TEXT, CHANGELOG_LIST
+from core.logger import Logger, scanner_log, qr_log, main_log, poll_log, bili_log, gui_log, debug, info, warn, error, LogLevel
+from .text_constants import MID_HELP_TEXT
 
 class QRCodePollingWorker(QObject):
     """二维码轮询工作线程"""
@@ -1665,121 +1664,8 @@ class MainWindow(QMainWindow):
         )
 
     def show_changelog(self):
-        """更新日志：固定窗口、无拖拽分割线、全局箭头光标、禁用文本选中、禁用全部右键"""
-        from PyQt6.QtWidgets import (
-            QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QTextEdit, QFrame
-        )
-        from PyQt6.QtCore import Qt
-        from PyQt6.QtGui import QCursor
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("更新日志")
-        fixed_win_w = 850
-        fixed_win_h = 600
-        dlg.setFixedSize(fixed_win_w, fixed_win_h)
-
-        main_layout = QVBoxLayout(dlg)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # 外层水平布局
-        h_layout = QHBoxLayout()
-        h_layout.setSpacing(0)
-        h_layout.setContentsMargins(0, 0, 0, 0)
-
-        # ========== 左侧版本列表 ==========
-        left_frame = QFrame()
-        left_frame.setFixedWidth(200)
-        left_layout = QVBoxLayout(left_frame)
-        left_layout.setContentsMargins(6, 6, 6, 6)
-
-        list_widget = QListWidget()
-        # 删掉所有cursor样式，只保留外观样式
-        list_widget.setStyleSheet("""
-            QListWidget {
-                border: none;
-                outline: none;
-            }
-            QListWidget::item {
-                padding:8px 6px;
-                border: none;
-                outline: none;
-            }
-            QListWidget::item:selected {
-                background:#e6f0ff;
-                color:#0058cc;
-                border: none;
-                outline: none;
-            }
-            QListWidget::item:focus {
-                outline: none;
-                border: none;
-            }
-        """)
-        version_map = {}
-        for idx, ver_info in enumerate(CHANGELOG_LIST):
-            title = ver_info["version_title"]
-            html_content = ver_info["html"]
-            item = QListWidgetItem(title)
-            list_widget.addItem(item)
-            version_map[idx] = html_content
-        left_layout.addWidget(list_widget)
-
-        # ========== 中间分隔细线 ==========
-        divider = QFrame()
-        divider.setFixedWidth(1)
-        divider.setStyleSheet("background:#dddddd;")
-
-        # ========== 右侧日志文本框 ==========
-        right_frame = QFrame()
-        right_layout = QVBoxLayout(right_frame)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        text_view = QTextEdit()
-        text_view.setReadOnly(True)
-        # 基础样式
-        text_view.setStyleSheet("border:none; padding:8px; font-size:14px;")
-        # 禁止获取焦点，消除文本类型光标
-        text_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        text_view.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        text_view.viewport().setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-        right_layout.addWidget(text_view)
-
-        # 组装布局
-        h_layout.addWidget(left_frame)
-        h_layout.addWidget(divider)
-        h_layout.addWidget(right_frame, stretch=1)
-        main_layout.addLayout(h_layout)
-
-        # 默认选中最新版本
-        list_widget.setCurrentRow(0)
-        text_view.setHtml(version_map[0])
-
-        # 切换版本逻辑
-        def on_version_selected(row):
-            html_data = version_map.get(row, "")
-            text_view.setHtml(html_data)
-        list_widget.currentRowChanged.connect(on_version_selected)
-
-        # 统一全局箭头光标
-        arrow_cursor = QCursor(Qt.CursorShape.ArrowCursor)
-        dlg.setCursor(arrow_cursor)
-        left_frame.setCursor(arrow_cursor)
-        divider.setCursor(arrow_cursor)
-        right_frame.setCursor(arrow_cursor)
-        list_widget.setCursor(arrow_cursor)
-        text_view.setCursor(arrow_cursor)
-
-        # 拦截所有右键菜单
-        def block_right_click(event):
-            event.accept()
-
-        dlg.contextMenuEvent = block_right_click
-        list_widget.contextMenuEvent = block_right_click
-        text_view.contextMenuEvent = block_right_click
-        left_frame.contextMenuEvent = block_right_click
-        right_frame.contextMenuEvent = block_right_click
-        divider.contextMenuEvent = block_right_click
-
+        from .changelog_dialog import ChangelogDialog
+        dlg = ChangelogDialog(self)
         dlg.exec()
     
     def open_github_issues(self):
