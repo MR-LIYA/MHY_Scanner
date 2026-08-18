@@ -4,12 +4,16 @@
 
 参考 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)（C++ 版）改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
 
-> **最新版本**: v1.0.5
+> **最新版本**: v1.0.6
 >
-> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/V1.0.5/MHY_Scanner_Setup.exe)
+> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/V1.0.6/MHY_Scanner_Setup.exe)
 >
 > **项目主页**: [MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
 首次运行时需要等待一会，以便产生对应的配置文件。
+
+---
+
+**注意**：目前登录一次可保持三个月左右的有效期，超过后可能需要重新登录一次。
 
 ---
 
